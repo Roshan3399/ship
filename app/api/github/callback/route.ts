@@ -1,35 +1,51 @@
-import { createAdminClient } from "@/lib/supabase/admin"
+import { createServerClient } from "@supabase/ssr"
+import { createClient } from "@supabase/supabase-js"
 import { exchangeGitHubCode, getGitHubUser, getGitHubRepos } from "@/lib/github"
 import { NextResponse, type NextRequest } from "next/server"
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const code = searchParams.get("code")
-  const error = searchParams.get("error")
+  const errorParam = searchParams.get("error")
 
-  if (error || !code) {
+  if (errorParam || !code) {
     return NextResponse.redirect(new URL("/dashboard?github=error", request.url))
   }
 
   try {
     const token = await exchangeGitHubCode(code)
-
     const githubUser = await getGitHubUser(token.access_token)
 
-    const supabase = createAdminClient()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() { return request.cookies.getAll() },
+          setAll() {},
+        },
+      }
+    )
+
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
-      return NextResponse.redirect(new URL("/login?error=unauthorized", request.url))
+      return NextResponse.redirect(new URL("/login?error=github_auth_required", request.url))
     }
 
-    const { data: existing } = await supabase
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    )
+
+    const { data: existing } = await admin
       .from("github_connections")
       .select("id")
       .eq("user_id", user.id)
       .maybeSingle()
 
     if (existing) {
-      await supabase
+      await admin
         .from("github_connections")
         .update({
           github_id: githubUser.id,
@@ -41,7 +57,7 @@ export async function GET(request: NextRequest) {
         })
         .eq("id", existing.id)
     } else {
-      await supabase.from("github_connections").insert({
+      await admin.from("github_connections").insert({
         user_id: user.id,
         github_id: githubUser.id,
         github_username: githubUser.login,
@@ -54,26 +70,24 @@ export async function GET(request: NextRequest) {
 
     try {
       const repos = await getGitHubRepos(token.access_token)
-      const repoInserts = repos.map((r) => ({
-        user_id: user.id,
-        github_repo_id: r.id,
-        name: r.name,
-        full_name: r.full_name,
-        description: r.description,
-        repo_created_at: r.created_at,
-        repo_updated_at: r.updated_at,
-        pushed_at: r.pushed_at,
-        language: r.language,
-        stargazers_count: r.stargazers_count,
-        forks_count: r.forks_count,
-        is_private: r.private,
-      }))
-
-      for (const repo of repoInserts) {
-        await supabase.from("github_repos").upsert(repo, {
-          onConflict: "user_id, github_repo_id",
-          ignoreDuplicates: false,
-        })
+      for (const r of repos) {
+        await admin.from("github_repos").upsert(
+          {
+            user_id: user.id,
+            github_repo_id: r.id,
+            name: r.name,
+            full_name: r.full_name,
+            description: r.description,
+            repo_created_at: r.created_at,
+            repo_updated_at: r.updated_at,
+            pushed_at: r.pushed_at,
+            language: r.language,
+            stargazers_count: r.stargazers_count,
+            forks_count: r.forks_count,
+            is_private: r.private,
+          },
+          { onConflict: "user_id, github_repo_id", ignoreDuplicates: false }
+        )
       }
     } catch {
       // repo sync failure is non-fatal
