@@ -131,6 +131,9 @@ ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE seasons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cohorts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE endorsements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_repos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE github_commits ENABLE ROW LEVEL SECURITY;
 
 -- Profiles
 DROP POLICY IF EXISTS "Anyone can view profiles" ON profiles;
@@ -219,6 +222,51 @@ DROP POLICY IF EXISTS "Only founder can add endorsements" ON endorsements;
 CREATE POLICY "Only founder can add endorsements"
   ON endorsements FOR INSERT
   WITH CHECK (auth.uid() IN (SELECT user_id FROM builds WHERE builds.id = build_id));
+
+-- GitHub connections
+DROP POLICY IF EXISTS "Users can view own github connection" ON github_connections;
+CREATE POLICY "Users can view own github connection"
+  ON github_connections FOR SELECT
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own github connection" ON github_connections;
+CREATE POLICY "Users can insert own github connection"
+  ON github_connections FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update own github connection" ON github_connections;
+CREATE POLICY "Users can update own github connection"
+  ON github_connections FOR UPDATE
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Anyone can view github username" ON github_connections;
+CREATE POLICY "Anyone can view github username"
+  ON github_connections FOR SELECT
+  USING (true);
+
+-- GitHub repos
+DROP POLICY IF EXISTS "Users can view own github repos" ON github_repos;
+CREATE POLICY "Users can view own github repos"
+  ON github_repos FOR SELECT
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Anyone can view github repos" ON github_repos;
+CREATE POLICY "Anyone can view github repos"
+  ON github_repos FOR SELECT
+  USING (true);
+
+-- GitHub commits
+DROP POLICY IF EXISTS "Users can view own repo commits" ON github_commits;
+CREATE POLICY "Users can view own repo commits"
+  ON github_commits FOR SELECT
+  USING (
+    EXISTS (SELECT 1 FROM github_repos WHERE github_repos.id = github_commits.repo_id AND github_repos.user_id = auth.uid())
+  );
+
+DROP POLICY IF EXISTS "Anyone can view commits of public repos" ON github_commits;
+CREATE POLICY "Anyone can view commits of public repos"
+  ON github_commits FOR SELECT
+  USING (true);
 
 -- Insert default season
 INSERT INTO seasons (name, start_date, end_date, is_active)

@@ -1,19 +1,36 @@
-import { createAdminClient } from "@/lib/supabase/admin"
-import { NextResponse } from "next/server"
-import type { Build, Log, GitHubConnection, GitHubRepo } from "@/types"
+import { createServerClient } from "@supabase/ssr"
+import { createClient } from "@supabase/supabase-js"
+import { NextResponse, type NextRequest } from "next/server"
+import type { Build, Log } from "@/types"
 
 export async function GET(
-  _request: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
 
   try {
-    const supabase = createAdminClient()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() { return request.cookies.getAll() },
+          setAll() {},
+        },
+      }
+    )
+
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-    const { data: build } = await supabase
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    )
+
+    const { data: build } = await admin
       .from("builds")
       .select("*")
       .eq("id", id)
@@ -21,17 +38,17 @@ export async function GET(
 
     if (!build) return NextResponse.json({ error: "Build not found" }, { status: 404 })
 
-    const b = build as unknown as Build
-    const { data: logs } = await supabase
+    const { data: logs } = await admin
       .from("logs")
       .select("*")
       .eq("build_id", id)
       .order("created_at", { ascending: true })
 
     const logList = (logs ?? []) as unknown as Log[]
+    const b = build as unknown as Build
     const days = logList.length
 
-    const { data: conn } = await supabase
+    const { data: conn } = await admin
       .from("github_connections")
       .select("*")
       .eq("user_id", user.id)
@@ -47,13 +64,13 @@ export async function GET(
     }
 
     if (conn) {
-      const gc = conn as unknown as GitHubConnection
+      const gc = conn as any
       const verifiedLogs = logList.filter((l) => l.github_verified)
       const allCommits = verifiedLogs.reduce((sum, l) => sum + (l.github_commits_count ?? 0), 0)
       const allRepos = [...new Set(verifiedLogs.flatMap((l) => l.github_repos_touched ?? []))]
       const allLangs = [...new Set(verifiedLogs.flatMap((l) => l.github_languages ?? []))]
 
-      const { data: repos } = await supabase
+      const { data: repos } = await admin
         .from("github_repos")
         .select("full_name, stargazers_count")
         .eq("user_id", user.id)
@@ -64,13 +81,13 @@ export async function GET(
         total_commits: allCommits,
         repo_count: allRepos.length,
         languages: allLangs.slice(0, 5).join(", ") || "N/A",
-        top_repo: allRepos[0] || (repos?.[0] as unknown as GitHubRepo)?.full_name || "N/A",
+        top_repo: allRepos[0] || (repos?.[0] as any)?.full_name || "N/A",
         github_username: gc.github_username,
         avatar_url: `https://github.com/${gc.github_username}.png`,
       }
     }
 
-    const { data: profile } = await supabase
+    const { data: profile } = await admin
       .from("profiles")
       .select("name, username, avatar_url")
       .eq("id", user.id)
