@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
-import { Plus, Flame, Calendar, Check, ShipIcon, AlertTriangle, Folder, ExternalLink } from "lucide-react"
+import { Plus, Flame, Calendar, Check, ShipIcon, AlertTriangle, Folder, ExternalLink, Star, GitFork, Loader2 } from "lucide-react"
 import { DashboardSkeleton } from "@/components/skeleton"
 import { Nav } from "@/components/nav"
 import { calculateStreak } from "@/lib/streak"
@@ -25,6 +25,9 @@ function DashboardContent() {
 
   const [githubConnected, setGithubConnected] = useState(false)
   const [githubUsername, setGithubUsername] = useState("")
+  const [githubRepos, setGithubRepos] = useState<any[]>([])
+  const [reposLoading, setReposLoading] = useState(false)
+  const [importingRepo, setImportingRepo] = useState<string | null>(null)
   const [githubActivity, setGithubActivity] = useState<{
     commits: { sha: string; message: string; url: string; repo: string }[]
     repos: string[]
@@ -66,6 +69,7 @@ function DashboardContent() {
         setGithubConnected(true)
         setGithubUsername((githubConn as any).github_username)
         fetchGithubActivity()
+        fetchGithubRepos()
       }
 
       const buildList = (allUserBuilds ?? []) as unknown as Build[]
@@ -139,6 +143,40 @@ function DashboardContent() {
         setGithubActivity(data)
       }
     } catch {}
+  }
+
+  async function fetchGithubRepos() {
+    setReposLoading(true)
+    try {
+      const res = await fetch("/api/github/repos")
+      if (res.ok) {
+        const data = await res.json()
+        setGithubRepos(data.repos ?? [])
+      }
+    } catch {}
+    setReposLoading(false)
+  }
+
+  async function importRepo(repo: any) {
+    setImportingRepo(repo.full_name)
+    try {
+      const res = await fetch("/api/github/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          full_name: repo.full_name,
+          name: repo.name,
+          description: repo.description,
+          language: repo.language,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        router.push(`/builds/${data.build.id}`)
+        return
+      }
+    } catch {}
+    setImportingRepo(null)
   }
 
   async function handleLogout() {
@@ -239,6 +277,7 @@ function DashboardContent() {
                   setGithubConnected(false)
                   setGithubUsername("")
                   setGithubActivity(null)
+                  setGithubRepos([])
                 }}
                 className="text-xs text-muted-foreground hover:text-red transition-colors"
               >
@@ -253,6 +292,68 @@ function DashboardContent() {
             )}
           </div>
         </div>
+
+        {githubConnected && (
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-foreground">GitHub repos</h3>
+              {reposLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            </div>
+            {githubRepos.length === 0 && !reposLoading ? (
+              <p className="text-xs text-muted-foreground">No repos found. Sync your GitHub account.</p>
+            ) : (
+              <div className="space-y-2">
+                {githubRepos.map((repo) => {
+                  return (
+                    <div
+                      key={repo.id}
+                      className="rounded-xl border border-border bg-card p-4 hover:border-muted-foreground/30 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground truncate">{repo.name}</span>
+                            {repo.language && (
+                              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                {repo.language}
+                              </span>
+                            )}
+                          </div>
+                          {repo.description && (
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{repo.description}</p>
+                          )}
+                          <div className="flex items-center gap-3 mt-1.5">
+                            {repo.stargazers_count > 0 && (
+                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Star className="h-3 w-3" /> {repo.stargazers_count}
+                              </span>
+                            )}
+                            {repo.forks_count > 0 && (
+                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <GitFork className="h-3 w-3" /> {repo.forks_count}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => importRepo(repo)}
+                          disabled={importingRepo === repo.full_name}
+                          className="shrink-0 rounded-lg bg-ship/10 px-3 py-1.5 text-xs font-medium text-ship hover:bg-ship/20 disabled:opacity-50 transition-all"
+                        >
+                          {importingRepo === repo.full_name ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            "Import"
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {activeBuilds.length === 0 ? (
           <div className="text-center py-16">
